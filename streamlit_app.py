@@ -1,4 +1,3 @@
-# streamlit_app.py
 import streamlit as st
 import os
 import numpy as np
@@ -9,31 +8,24 @@ import google.generativeai as genai
 from dotenv import load_dotenv
 import re
 
-# Load environment variables from .env file
-load_dotenv()
 
-# Set up page configuration
+load_dotenv() # API loading from .env file
 st.set_page_config(page_title="Sri Lankan Constitution Chatbot", layout="wide")
 
 # Title and description
 st.title("Sri Lankan Constitution Chatbot")
 st.markdown(
-    "Ask questions about the Sri Lankan Constitution in Sinhala and get answers powered by AI with retrieval-augmented generation (RAG).")
+    "Ask questions about the Sri Lankan Constitution in Sinhala. Developed by Pooja Illangarathne")
 
-# Load environment variables (e.g., API key)
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-if not GOOGLE_API_KEY:
-    st.error(
-        "GOOGLE_API_KEY not found. Please set it in the .env file and ensure the file is in the project directory.")
-    st.stop()
 genai.configure(api_key=GOOGLE_API_KEY)
 
-# Paths to models and data
+# models and data paths, Inspired from --> (Hettige & Karunananda, 2006)
 FASTTEXT_MODEL_PATH = "fasttext_sinhala_bpe.model"
 BPE_MODEL_PATH = "sinhala_spm_bpe.model"
 CONSTITUTION_PATH = "Sri Lanka Constitution-Sinhala.txt"
 
-# Load models and data with caching
+# Load models with caching
 @st.cache_resource
 def load_models_and_data():
     ft_model = FastText.load(FASTTEXT_MODEL_PATH)
@@ -46,7 +38,7 @@ def load_models_and_data():
 ft_model, sp, passages = load_models_and_data()
 
 
-# Precompute passage embeddings and build nearest neighbor index
+
 @st.cache_resource
 def build_retrieval_index(passages, _ft_model, _sp):
     def get_embedding(text):
@@ -55,18 +47,18 @@ def build_retrieval_index(passages, _ft_model, _sp):
         return np.mean(valid_vectors, axis=0) if valid_vectors else np.zeros(_ft_model.vector_size)
 
     passage_embeddings = np.array([get_embedding(p) for p in passages])
-    nn = NearestNeighbors(n_neighbors=10, metric="cosine")
+    nn = NearestNeighbors(n_neighbors=10, metric="cosine") # building nearest neighbor index for the embeddings
     nn.fit(passage_embeddings)
     return nn, passage_embeddings
 
 
 nn, passage_embeddings = build_retrieval_index(passages, ft_model, sp)
 
-# Initialize Gemini model
+################################################
 model = genai.GenerativeModel("gemini-1.5-pro")
+################################################
 
 
-# Function to retrieve context
 def retrieve_context(question, nn, passages, ft_model, sp):
     def get_embedding(text):
         tokens = sp.encode(text, out_type=str)
@@ -76,61 +68,55 @@ def retrieve_context(question, nn, passages, ft_model, sp):
     query_emb = get_embedding(question).reshape(1, -1)
     distances, indices = nn.kneighbors(query_emb)
 
-    # Return both context and the cosine similarity scores (as distances)
     retrieved_passages = [passages[i] for i in indices[0]]
     similarity_scores = [1 - dist for dist in distances[0]]  # Convert distance to similarity (1 - distance)
 
-    return retrieved_passages, similarity_scores
+    return retrieved_passages, similarity_scores # Return context and the cosine similarity scores (as distances)
 
 
-# Sri Lanka Constitution keywords in English and Sinhala
+#################this is to handle the out-of-scope questions (Experimental purposes) ######################
 CONSTITUTION_KEYWORDS = [
-    # English keywords
+
     r'constitution', r'law', r'parliament', r'president', r'judiciary', r'government', r'election', r'vote',
     r'court', r'rights', r'article', r'amendment', r'sri lanka', r'citizen', r'minister', r'cabinet',
-    # Sinhala keywords
+
     r'ව්‍යවස්ථාව', r'පාර්ලිමේන්තු', r'ජනාධිපති', r'අධිකරණ', r'ආණ්ඩුව', r'මැතිවරණ', r'ඡන්ද',
     r'උසාවි', r'අයිතිවාසිකම්', r'වගන්ති', r'සංශෝධන', r'ශ්‍රී ලංකා', r'පුරවැසි', r'අමාත්‍ය', r'කැබිනට්',
-    # Added additional language-related keywords
+
+    # language-related keywords
     r'භාෂාව', r'ජාතික භාෂා', r'රාජ්‍ය භාෂාව', r'language', r'national language', r'official language',
     r'සිංහල', r'දෙමළ', r'ඉංග්‍රීසි', r'sinhala', r'tamil', r'english'
 ]
 
 
-# Function to generate answer with Gemini API
-def generate_answer(prompt, max_tokens=700):
+
+def generate_answer(prompt, max_tokens=800): # Function to generate answer with Gemini API
     response = model.generate_content(
         prompt,
         generation_config=genai.types.GenerationConfig(
             max_output_tokens=max_tokens,
-            temperature=0.2  # Slightly increased for better completions
+            temperature=0.3
         )
     )
     return response.text
 
 
-# Function to answer with RAG - removed out-of-scope detection
+
 def answer_with_rag(question, nn, passages, ft_model, sp):
     retrieved_passages, similarity_scores = retrieve_context(question, nn, passages, ft_model, sp)
     context = " ".join(retrieved_passages)
 
-    # Enhanced prompt for better results
     prompt = (
-        f"Instructions: You are an expert on the Sri Lankan Constitution. Use the provided context to answer the question about the Sri Lankan Constitution accurately and completely in Sinhala. "
-        f"Even if the context doesn't have explicit information about the question, if it contains related information, use it to provide the best possible answer. "
-        f"For questions about national languages, official languages, or language rights, be especially thorough in your answer. "
-        f"Include specific references to articles or sections of the Sri Lankan Constitution when possible. "
-        f"If the context mentions languages (Sinhala, Tamil, English) in any capacity, include that information in your answer. "
-        f"If there is absolutely no relevant information in the context, respond with: 'සමාවන්න, මට මෙම ප්‍රශ්නයට පිළිතුරු දීමට ප්‍රමාණවත් තොරතුරු නොමැත.'\n"
+        f"Instructions: Use the provided context to answer the question accurately and completely in Sinhala. "
+        f"Include specific references to articles or sections of the Sri Lankan Constitution when relevant. "
+        f"If the context is insufficient or irrelevant, use your general knowledge to provide a correct answer.\n"
         f"Context: {context}\n"
         f"Q: {question}\n"
         f"A:"
     )
+    return generate_answer(prompt, max_tokens=800), context, similarity_scores
 
-    return generate_answer(prompt, max_tokens=700), context, similarity_scores
 
-
-# Function to check if a query needs pre-processing
 def preprocess_query(query):
     # Map of common question patterns about national/official languages
     language_questions = {
@@ -140,9 +126,9 @@ def preprocess_query(query):
         r'භාෂා': 'ශ්‍රී ලංකා ව්‍යවස්ථාව අනුව භාෂා පිළිබඳව කුමක් සඳහන් වේද? සිංහල, දෙමළ, ඉංග්‍රීසි භාෂා ගැන ව්‍යවස්ථාවේ කුමක් සඳහන් වේද?'
     }
 
-    # Check if the query matches any patterns
     for pattern, expanded_query in language_questions.items():
-        if re.search(pattern, query, re.IGNORECASE):
+        if re.search(pattern, query, re.IGNORECASE):     # Cross-check if the query matches any patterns
+
             return expanded_query
 
     return query  # Return original if no pattern matches
@@ -152,20 +138,15 @@ def preprocess_query(query):
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
-# Input form for user questions
 with st.form(key="question_form", clear_on_submit=True):
     question = st.text_input("Enter your question in Sinhala:",
                              placeholder="E.g., ශ්‍රී ලංකා ව්‍යවස්ථාව අනුව ජාතික භාෂා මොනවාද?")
     submit_button = st.form_submit_button(label="Ask")
 
-# Process the question and display the answer
 if submit_button and question:
-    # Preprocess the query if needed
     processed_question = preprocess_query(question)
-
     answer, context, similarity_scores = answer_with_rag(processed_question, nn, passages, ft_model, sp)
 
-    # Store the original question, not the processed one in the chat history
     st.session_state.chat_history.append({
         "question": question,
         "answer": answer,
@@ -173,7 +154,7 @@ if submit_button and question:
         "relevance": max(similarity_scores)
     })
 
-# Display chat history
+# chat history
 if st.session_state.chat_history:
     st.subheader("Chat History")
     for i, chat in enumerate(st.session_state.chat_history):
